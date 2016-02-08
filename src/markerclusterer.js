@@ -96,6 +96,12 @@ function MarkerClusterer(map, opt_markers, opt_options) {
   var options = opt_options || {};
 
   /**
+   * @type {Array.<MarkerClusterer>}
+   * @private
+   */
+  this.avoidClusterers_ = options['avoidClusterers'] || [];
+
+  /**
    * @type {number}
    * @private
    */
@@ -314,6 +320,23 @@ MarkerClusterer.prototype.getMarkers = function() {
   return this.markers_;
 };
 
+/**
+ *  Returns the array of clusters in the clusterer.
+ *
+ *  @return {Array.<Cluster>} The clusters.
+ */
+MarkerClusterer.prototype.getClusters = function() {
+  return this.clusters_;
+};
+
+/**
+ *  Returns the array of clusterers to avoid when placing the cluster icons.
+ *
+ *  @return {Array.<MarkerClusterer>} The clusterers.
+ */
+MarkerClusterer.prototype.getAvoidClusterers = function() {
+  return this.avoidClusterers_;
+};
 
 /**
  *  Returns the number of markers in the clusterer
@@ -707,6 +730,10 @@ MarkerClusterer.prototype.repaint = function() {
  */
 MarkerClusterer.prototype.redraw = function() {
   this.createClusters_();
+
+  for (var i = 0, cluster; cluster = this.clusters_[i]; i++) {
+    cluster.avoidClusterers_();
+  }
 };
 
 
@@ -907,12 +934,86 @@ Cluster.prototype.getBounds = function() {
 
 
 /**
+ * Tries to move the cluster's center to avoid overlapping with other MarkerClusterers, set by the avoidClusterers option.
+ *
+ * @private
+ */
+Cluster.prototype.avoidClusterers_= function() {
+  var overlapDivisor = 2;
+  var avoidClusterers = this.getMarkerClusterer().getAvoidClusterers();
+
+  for (var i = 0, clusters; clusterer = avoidClusterers[i]; i++) {
+    var clusters = clusterer.getClusters();
+    for (var j = 0, that; that = clusters[j]; j++) {
+      if (this.overlaps_(that)) {
+        var center_diff = {};
+        var diff_px_x = 0;
+        var diff_px_y = 0;
+
+        var this_center = this.clusterIcon_.getCenter();
+        var that_center = that.clusterIcon_.getCenter();
+        var this_center_px = this.clusterIcon_.getProjection().fromLatLngToDivPixel(this_center);
+        center_diff.x = this_center.lng() - that_center.lng();
+        center_diff.y = this_center.lat() - that_center.lat();
+
+        var this_bbox = this.clusterIcon_.getBoundingBox();
+        var that_bbox = that.clusterIcon_.getBoundingBox();
+
+        // Move this overlapping cluster in the direction that requires least movement.
+        if (Math.abs(center_diff.x) > Math.abs(center_diff.y)) {
+          if (center_diff.x < 0) {
+            var diff_px_x = that_bbox.left - this_bbox.right + this.clusterIcon_.getPixelSize().width / overlapDivisor;
+          } else {
+            var diff_px_x = that_bbox.right - this_bbox.left - this.clusterIcon_.getPixelSize().width / overlapDivisor;
+          }
+        } else {
+          if (center_diff.y < 0) {
+            var diff_px_y = that_bbox.bottom - this_bbox.top + this.clusterIcon_.getPixelSize().height / overlapDivisor;
+          } else {
+            var diff_px_y = that_bbox.top - this_bbox.bottom - this.clusterIcon_.getPixelSize().height / overlapDivisor;
+          }
+        }
+
+        this.clusterIcon_.setCenter(this.clusterIcon_.getProjection().fromDivPixelToLatLng({
+          x: this_center_px.x + diff_px_x,
+          y: this_center_px.y + diff_px_y
+        }));
+      }
+    }
+  }
+};
+
+
+/**
  * Removes the cluster
  */
 Cluster.prototype.remove = function() {
   this.clusterIcon_.remove();
   this.markers_.length = 0;
   delete this.markers_;
+};
+
+
+/**
+ * Returns if this cluster overlaps with the one passed as argument.
+ *
+ * @param {Cluster} cluster The cluster to check
+ * @return {boolean} Both clusters overlap.
+ * @private
+ */
+Cluster.prototype.overlaps_ = function(that) {
+  if (!this.clusterIcon_.visible_ || !that.clusterIcon_.visible_)
+    return false;
+
+  var this_bbox = this.clusterIcon_.getBoundingBox();
+  var that_bbox = that.clusterIcon_.getBoundingBox();
+
+  return (
+    this_bbox.left < that_bbox.right &&
+    this_bbox.right > that_bbox.left &&
+    this_bbox.top > that_bbox.bottom &&
+    this_bbox.bottom < that_bbox.top
+  );
 };
 
 
@@ -1102,6 +1203,38 @@ ClusterIcon.prototype.getPosFromLatLng_ = function(latlng) {
 
 
 /**
+ * Returns an object containing a bounding box (in pixels) for this icon.
+ *
+ * @return {object} The bounding box.
+ */
+ClusterIcon.prototype.getBoundingBox = function() {
+  var center_px = this.getProjection().fromLatLngToDivPixel(this.getCenter());
+
+  var bbox = {
+    top: center_px.y + this.height_ / 2,
+    right: center_px.x + this.width_ / 2,
+    bottom: center_px.y - this.height_ / 2,
+    left: center_px.x - this.width_ / 2
+  };
+
+  return bbox;
+};
+
+
+/**
+ * Returns an object containing the size of this icon.
+ *
+ * @return {object} The width and height of this icon.
+ */
+ClusterIcon.prototype.getPixelSize = function() {
+  if (!this.visible_)
+    return null;
+
+  return {width: this.width_, height: this.height_};
+};
+
+
+/**
  * Draw the icon.
  * @ignore
  */
@@ -1193,6 +1326,16 @@ ClusterIcon.prototype.useStyle = function() {
   this.textSize_ = style['textSize'];
   this.backgroundPosition_ = style['backgroundPosition'];
   this.iconAnchor_ = style['iconAnchor'];
+};
+
+
+/**
+ * Gets the center of the icon.
+ *
+ * @return{google.maps.LatLng} The latlng of the center.
+ */
+ClusterIcon.prototype.getCenter = function() {
+  return this.center_;
 };
 
 
